@@ -3,7 +3,7 @@
 <img width="439" alt="image" src="https://github.com/k4fn/Shonai_GAS/assets/121530063/59597a90-e379-4ccb-a3db-556d06317318">
 <img width="180" alt="image" src="https://github.com/k4fn/Shonai_GAS/assets/121530063/3e4bbeea-9d6f-4cf6-9736-a04499c5f948">
 
-# [Shonai_GAS](https://github.com/k4fn/Shonai_GAS)と[Shonai_GAS_v2](https://github.com/k4fn/Shonai_GAS_v2)の違い
+# [Shonai_GAS](https://github.com/k4fn/Shonai_GAS)とShonai_GAS_v2の違い
 同じ日に同じ部屋を、時間を開けて取ったときの挙動が違います。  
 ⬇Shonai_GAS  
 <img width="485" alt="cccccccccc" src="https://github.com/user-attachments/assets/669f0b07-605b-4760-b3b0-a3545cd94e37">  
