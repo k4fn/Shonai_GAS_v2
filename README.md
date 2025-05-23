@@ -97,7 +97,3 @@
 3. ダウンロードした `.xlsx` ファイルを開いてコピペすれば完了！
 
 ---
-
-## 📮 不具合や質問
-
-動かない・わからない点があれば、GitHubの[Issues](https://github.com/k4fn/Shonai_GAS/issues)で知らせてください！
