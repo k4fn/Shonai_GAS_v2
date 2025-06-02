@@ -11,7 +11,7 @@
 
 ## 🔄 Shonai_GASとShonai_GAS_v2の違い
 
-同じ日・同じ部屋で時間を変えて予約した場合の動作が異なります。
+同じ日・同じ部屋で時間を空けて予約した場合の動作が異なります。
 
 **Shonai_GAS の挙動：**  
 <img width="485" alt="Shonai_GAS_behavior" src="https://github.com/user-attachments/assets/669f0b07-605b-4760-b3b0-a3545cd94e37">
