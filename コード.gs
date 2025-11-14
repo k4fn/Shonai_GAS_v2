@@ -80,7 +80,7 @@ function myFunction() {
     for (let row = 2; row <= 32; row++) {//行に関して、x月1日(2行目)からx月31日(32行目)まで繰り返す
 
       //時間割の部分を取得
-      const range = roomSheet.getRange(row, 2, 1, 8);
+      const range = roomSheet.getRange(row, 3, 1, 8);
 
       //月、日、曜日を取得
       const date = new Date(roomSheet.getRange(row, 1, 1, 1).getValue());
@@ -97,13 +97,13 @@ function myFunction() {
       let timetableArray = [0, 0, 0, 0, 0, 0, 0, 0];//1時限目のをtimetablePerDay[0]
 
       //利用時間を配列timetableArrayに記録
-      for (let col = 2; col <= 9; col++) {//列に関して、１限目(2列目)から放課後(9列目)まで繰り返す
+      for (let col = 3; col <= 10; col++) {//列に関して、１限目(3列目)から放課後(10列目)まで繰り返す
 
         const a1 = R1C1toA1("R" + row + "C" + col);
         const value = roomSheet.getRange(a1).getValue();
 
         if (value == circle) {
-          timetableArray[col - 2] = 1;
+          timetableArray[col - 3] = 1;
         }
       }
       const mergedRanges = range.getMergedRanges();
@@ -112,7 +112,7 @@ function myFunction() {
           let start = A1Notation_to_start(mergedRanges[x].getA1Notation())
           const end = A1Notation_to_end(mergedRanges[x].getA1Notation())
           for (; start <= end; start++) {
-            timetableArray[start - 2] = 1;
+            timetableArray[start - 3] = 1;
           }
         }
       }
