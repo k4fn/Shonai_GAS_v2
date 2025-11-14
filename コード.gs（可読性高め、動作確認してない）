@@ -31,7 +31,7 @@ const ROWS_PER_MEETING_SHEET = 14;
 
 // --- 折衝表シートの構造に関する設定 ---
 const NEGOTIATION_SHEET_DATE_COLUMN = 1; // 日付が記載されている列 (A列=1)
-const NEGOTIATION_SHEET_START_PERIOD_COLUMN = 2; // 1限目のデータが始まる列 (B列=2)
+const NEGOTIATION_SHEET_START_PERIOD_COLUMN = 3; // 1限目のデータが始まる列 (B列=2)
 const NEGOTIATION_SHEET_NUMBER_OF_PERIODS = 8; // 時間割のコマ数 (例: 1限目～8限目/放課後)
 
 // --- 出力する学内集会願シートの構造に関する設定 ---
