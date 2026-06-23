@@ -1,278 +1,433 @@
-//動作確認済み
+/**
+ * @fileoverview
+ * 折衝表スプレッドシートから情報を読み取り、学内集会願スプレッドシートを生成するスクリプト。
+ * 各部屋の利用状況を月ごとにまとめ、指定された形式で新しいシートに書き出す。
+ * また、サークルメンバーへの周知用サマリーシートも作成する。
+ */
 
-//----------適宜変更してください-----------------------------------------------------------------
+//-------------------------- 設定 (グローバル変数) --------------------------
+// 折衝表のスプレッドシートのURL
+const NEGOTIATION_SHEET_URL = 'https://docs.google.com/spreadsheets/d/xxxxxxxxxxxxxxx';
+// サークル名 (折衝表で検索する値)
+const CIRCLE_NAME = 'xxx部';
+// 作成する学内集会願のファイル名のプレフィックス (月が後で追加されます)
+const NEW_SPREADSHEET_BASE_NAME = 'xxx部_学内集会願コピペ_';
+// 学内集会願のテンプレートシートのURL
+const TEMPLATE_SPREADSHEET_URL = 'https://docs.google.com/spreadsheets/d/xxxxxxxxxxxxxxx';
+// 作成した学内集会願を保存するGoogle DriveフォルダーのID (空文字の場合はマイドライブ直下)
+const OUTPUT_FOLDER_ID = 'xxxxxxxxxxxxxxx';
+// 処理対象の部屋名のリスト
+const ROOMS = ['4203', '4302', '5405A', '5405B', '5505', '防音室B', '防音室C'];
+// 授業時間帯の開始時刻リスト (新フォーマットの1H〜放課後に対応)
+const START_TIMES = ['9:20', '11:05', '12:35', '13:45', '15:30', '17:15', '19:00', '20:30'];
+// 授業時間帯の終了時刻リスト (新フォーマットの1H〜放課後に対応)
+const END_TIMES = ['10:50', '12:35', '13:45', '15:15', '17:00', '18:45', '20:30', '22:00'];
+// 学内集会願に記入する利用人数
+const NUMBER_OF_USERS = '5';
+// 学内集会願の1シートあたりの最大行数 (これを超えると新しいシートが作成される)
+const ROWS_PER_MEETING_SHEET = 15;
 
-//折衝表のスプレッドシートのurl
-const sesshoUrl = 'https://docs.google.com/spreadsheets/d/xxxxxxxxxxxxxxx';
+// --- 折衝表シートの構造に関する設定 ---
+const NEGOTIATION_SHEET_DATE_COLUMN = 1; // 日付が記載されている列 (A列=1)
+const NEGOTIATION_SHEET_START_PERIOD_COLUMN = 3; // 1限目のデータが始まる列 (C列=3)
+const NEGOTIATION_SHEET_NUMBER_OF_PERIODS = 8; // 時間割のコマ数 (例: 1限目～8限目/放課後)
 
-//サークル名前
-const circle = 'xxx部';
+// --- 出力する学内集会願シートの構造に関する設定 ---
+const OUTPUT_SHEET_WRITE_COLUMNS = 25; // 新フォーマットはA列からY列まで
 
-//作成したい学内集会願の名前(月は後で追加されます)
-const newSSfileName = circle + "_学内集会願コピペ_";
+const OUTPUT_SHEET_ROOM_NAME_COLUMN = 1;      // A列: 施設名
+const OUTPUT_SHEET_DATE_COLUMN = 3;           // C列: 月/日(曜)
+const OUTPUT_SHEET_FIRST_PERIOD_MARK_COLUMN_INDEX = 4; // E列(1Hマーク)のインデックス (0から数えて4番目)
+const OUTPUT_SHEET_START_HOUR_COLUMN = 14;    // N列: 開始時
+const OUTPUT_SHEET_START_TIME_SEPARATOR_COLUMN = 15; // O列: 「：」
+const OUTPUT_SHEET_START_MINUTE_COLUMN = 16;  // P列: 開始分
+const OUTPUT_SHEET_TIME_RANGE_SEPARATOR_COLUMN = 17; // Q列: 「-」
+const OUTPUT_SHEET_END_HOUR_COLUMN = 18;      // R列: 終了時
+const OUTPUT_SHEET_END_TIME_SEPARATOR_COLUMN = 19; // S列: 「：」
+const OUTPUT_SHEET_END_MINUTE_COLUMN = 20;    // T列: 終了分
+const OUTPUT_SHEET_USERS_COLUMN = 21;         // U列: 利用人数
+const OUTPUT_SHEET_REMARKS_COLUMN = 22;       // V列: 備考
 
-//学内集会願のテンプレのurl
-const tmpUrl = 'https://docs.google.com/spreadsheets/d/xxxxxxxxxxxxxxx';
+// テンプレートとして使うシート名候補。テンプレ.xlsxはテンプレ。
+const TEMPLATE_SHEET_NAME_CANDIDATES = ['テンプレ', 'テンプレ'];
 
-//作成した学内集会願を保存したいフォルダーのid
-const id = 'xxxxxxxxxxxxxxx';
+// --- 周知用シートの設定 ---
+const NOTIFICATION_SHEET_NAME = "周知用";
+//------------------------------------------------------------------------------------
 
-//部屋一覧
-const room = ['4203', '4302', '5405A', '5405B', '5505', '防音室B', '防音室C'];
+/**
+ * メイン関数: 折衝表からデータを処理し、学内集会願を作成
+ */
+function createMeetingRequestSpreadsheets() {
+  const negotiationSs = openSpreadsheetByUrlOrId(NEGOTIATION_SHEET_URL, '折衝表');
+  if (!negotiationSs) return;
 
-//授業開始時間
-const startTime = ['9:20', '11:10', '12:50', '13:40', '15:30', '17:20', '19:10', '21:00'];
+  const { newSs, templateSheet } = initializeOutputSpreadsheet();
+  if (!newSs || !templateSheet) return; // 初期化失敗時は終了
 
-//授業終了時間
-const endTime = ['11:00', '12:50', '13:40', '15:20', '17:10', '19:00', '20:50', '22:00'];
+  let scheduleForNotification = Array(32).fill(null); // [0]に月、[1]～[31]に日のデータ
+  
+  let processingState = {
+    isFirstDataProcessed: false, // スプレッドシート名を月で更新したかどうかのフラグ
+    initialSheet1: newSs.getSheetByName('シート1') // 初期に存在する「シート1」
+  };
 
-//人数
-const users = '5';
-
-//部屋の時間とかを記入するところの行数
-const gyou = 14;
-
-//------------------------------------------------------------------------------------------
-
-
-function myFunction() {
-  //折衝表のスプレッドシートの読み込み
-  const sesshoSS = SpreadsheetApp.openByUrl(sesshoUrl);
-
-  //学内集会願のスプレッドシートの作成
-  const newSS = SpreadsheetApp.create('あ');
-
-  Logger.log(newSS.getUrl());
-
-  //設定した保存したいフォルダーに移動
-  if (id != '') {
-    const file = DriveApp.getFileById(newSS.getId());
-    file.moveTo(DriveApp.getFolderById(id));
+  // 各部屋について処理
+  for (const roomName of ROOMS) {
+    processRoomData(roomName, negotiationSs, newSs, templateSheet, scheduleForNotification, processingState);
   }
 
+  createNotificationSheetAndFinalize(newSs, scheduleForNotification, processingState);
+  // Logger.log("処理が完了しました。");
+}
 
-  //テンプレを読み込む
-  const tmpSheet = SpreadsheetApp.openByUrl(tmpUrl).getSheetByName('テンプレ');
+/**
+ * 出力用スプレッドシートの初期化（作成、フォルダ移動、テンプレート読み込み）
+ */
+function initializeOutputSpreadsheet() {
+  const templateSs = openSpreadsheetByUrlOrId(TEMPLATE_SPREADSHEET_URL, 'テンプレート');
+  if (!templateSs) {
+    return { newSs: null, templateSheet: null };
+  }
 
-  //部員に周知する用
-  let schedule = Array(32);//0-31の32個
+  const templateSheet = getTemplateSheet(templateSs);
+  if (!templateSheet) {
+    SpreadsheetApp.getUi().alert('エラー', `テンプレートシート（${TEMPLATE_SHEET_NAME_CANDIDATES.join(' / ')}）が見つかりません。URLとシート名を確認してください。`, SpreadsheetApp.getUi().ButtonSet.OK);
+    return { newSs: null, templateSheet: null };
+  }
 
-  //circleSheetに追加していくとき用の値
-  //let setRow = 1;
+  const newSs = SpreadsheetApp.create(NEW_SPREADSHEET_BASE_NAME + '_TEMP_NAME_');
+  Logger.log(`新しいスプレッドシートを作成しました↓`);
+  Logger.log(newSs.getUrl());
 
-  //配列roomに入っている部屋すべて繰り返す
-  for (let i = 0; i < room.length; i++) {
-
-    let roomRow = 0;
-
-    //部屋のシートを選択
-    const roomSheet = sesshoSS.getSheetByName(room[i]);
-
-    //学内集会願の部屋のシートを作成
-    let copySheet = tmpSheet.copyTo(newSS);
-    copySheet.setName(room[i] + '_1');
-
-    // if(i == 0){
-    //   newSS.deleteSheet(newSS.getSheetByName('シート1'));
-    // }
-
-
-    for (let row = 2; row <= 32; row++) {//行に関して、x月1日(2行目)からx月31日(32行目)まで繰り返す
-
-      //時間割の部分を取得
-      const range = roomSheet.getRange(row, 3, 1, 8);
-
-      //月、日、曜日を取得
-      const date = new Date(roomSheet.getRange(row, 1, 1, 1).getValue());
-      const month = date.getMonth() + 1;  //月
-      const day = date.getDate(); //日
-      const dayOfWeek = ["日", "月", "火", "水", "木", "金", "土"][date.getDay()];  // 曜日(日本語表記)
-
-      //作成したい学内集会願のファイル名に「◯月」を追加
-      if (row == 2) {
-        newSS.rename(newSSfileName + month + "月");
-      }
-
-      //折衝表の時間割の配列
-      let timetableArray = [0, 0, 0, 0, 0, 0, 0, 0];//1時限目のをtimetablePerDay[0]
-
-      //利用時間を配列timetableArrayに記録
-      for (let col = 3; col <= 10; col++) {//列に関して、１限目(3列目)から放課後(10列目)まで繰り返す
-
-        const a1 = R1C1toA1("R" + row + "C" + col);
-        const value = roomSheet.getRange(a1).getValue();
-
-        if (value == circle) {
-          timetableArray[col - 3] = 1;
-        }
-      }
-      const mergedRanges = range.getMergedRanges();
-      for (var x = 0; x < mergedRanges.length; x++) {
-        if (mergedRanges[x].getDisplayValue() == circle) {
-          let start = A1Notation_to_start(mergedRanges[x].getA1Notation())
-          const end = A1Notation_to_end(mergedRanges[x].getA1Notation())
-          for (; start <= end; start++) {
-            timetableArray[start - 3] = 1;
-          }
-        }
-      }
-
-      //配列timetableArrayから、具体的な利用時間を取得　ex(9:20~22:00
-      let count = 0;
-      for (let k = 0; k < timetableArray.length; k++) {
-        let start, end;
-
-        if (timetableArray[k] == 1) {
-          //roomRow++;
-          count++;
-
-          start = k; //k=0は1時限目
-          while (timetableArray[k] == 1) {
-            k++;
-          }
-          k--;
-          end = k;
-
-          //set = [部屋, 開始時間, 終了時間]　の配列
-          let set = [room[i], startTime[start], endTime[end], '(' + dayOfWeek + ')'];
-
-          //ここで学内集会願の表をつくる
-          let values = Array(27);
-          values[0] = room[i];
-          values[5] = month + '/' + day;
-          values[6] = '(' + dayOfWeek + ')';
-          for (let x = 0; x < timetableArray.length; x++) {
-            if (timetableArray[x] == 1) {
-              values[6 + (x + 1) * 2 - 1] = '〇';
-            }
-          }
-          values[23] = set[1] + '\n～\n' + set[2];
-          values[26] = users;
-          values = [values];
-
-
-          if (count >= 2) {
-            let text;
-            if (roomRow % gyou == 0) {
-              text = copySheet.getRange("AC" + (roomRow)).getValue();
-              copySheet.getRange("AC" + (roomRow)).setValue(text + set[1] + '～' + set[2]);
-            } else {
-              text = copySheet.getRange("AC" + (roomRow % gyou)).getValue();
-              copySheet.getRange("AC" + (roomRow % gyou)).setValue(text + set[1] + '～' + set[2]);
-            }
-          } else {
-            roomRow++;
-            if (roomRow == gyou + 1) {
-              copySheet = tmpSheet.copyTo(newSS);
-              copySheet.setName(room[i] + '_' + (Math.floor(roomRow / gyou) + 1));
-            }
-
-            //書き込む
-            if (roomRow % gyou == 0) {
-              copySheet.getRange(R1C1toA1('R' + roomRow + 'C1') + ':' + R1C1toA1('R' + roomRow + 'C27')).setValues(values);
-            } else {
-              copySheet.getRange(R1C1toA1('R' + (roomRow % gyou) + 'C1') + ':' + R1C1toA1('R' + (roomRow % gyou) + 'C27')).setValues(values);
-            }
-          }
-
-
-
-
-          //配列scheduleに、日にちごとに配列setを格納
-          if (schedule[day] == null) {
-            const arr = [set];
-            schedule[day] = arr;
-          } else {
-            schedule[day].push(set);
-          }
-        }
-      }
-      if (row == 2) {
-        schedule[0] = month;
-      }
-    }
-    if (roomRow == 0) {
-      //newSS.deleteSheet(newSS.getSheetByName(room[i]));
-      newSS.deleteSheet(copySheet);
+  if (OUTPUT_FOLDER_ID) {
+    try {
+      DriveApp.getFileById(newSs.getId()).moveTo(DriveApp.getFolderById(OUTPUT_FOLDER_ID));
+      // Logger.log(`スプレッドシートをフォルダID "${OUTPUT_FOLDER_ID}" に移動しました。`);
+    } catch (e) {
+      Logger.log(`フォルダへの移動に失敗しました: ${e.toString()}. マイドライブに保存されます。`);
     }
   }
-  newSS.deleteSheet(newSS.getSheetByName('シート1'));
 
-  //部員に知らせるようのやつ
-  let scheduleStr = '';
+  return { newSs, templateSheet };
+}
+
+/**
+ * スプレッドシートのURLまたはIDからSpreadsheetを取得
+ */
+function openSpreadsheetByUrlOrId(urlOrId, label) {
+  const value = String(urlOrId || '').trim();
+  if (!value || value.includes('xxxxxxxx')) {
+    SpreadsheetApp.getUi().alert('エラー', `${label}のURLまたはIDを設定してください。`, SpreadsheetApp.getUi().ButtonSet.OK);
+    return null;
+  }
+
+  const id = extractSpreadsheetId(value);
+  if (!id) {
+    SpreadsheetApp.getUi().alert('エラー', `${label}はGoogleスプレッドシートのURLまたはIDを指定してください。Excelファイル（.xlsx）のURLはそのままでは使えません。`, SpreadsheetApp.getUi().ButtonSet.OK);
+    return null;
+  }
+
+  try {
+    return SpreadsheetApp.openById(id);
+  } catch (e) {
+    SpreadsheetApp.getUi().alert('エラー', `${label}を開けませんでした。Googleスプレッドシート形式に変換済みか、アクセス権があるか確認してください。\n\n${e.toString()}`, SpreadsheetApp.getUi().ButtonSet.OK);
+    return null;
+  }
+}
+
+/**
+ * GoogleスプレッドシートURLまたはIDからファイルIDを抽出
+ */
+function extractSpreadsheetId(urlOrId) {
+  const spreadsheetUrlMatch = urlOrId.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  if (spreadsheetUrlMatch) return spreadsheetUrlMatch[1];
+
+  const directIdMatch = urlOrId.match(/^[a-zA-Z0-9-_]{20,}$/);
+  return directIdMatch ? directIdMatch[0] : null;
+}
+
+/**
+ * テンプレートスプレッドシートから、コピー元にするシートを取得
+ */
+function getTemplateSheet(templateSs) {
+  for (const sheetName of TEMPLATE_SHEET_NAME_CANDIDATES) {
+    const sheet = templateSs.getSheetByName(sheetName);
+    if (sheet) return sheet;
+  }
+
+  const sheets = templateSs.getSheets();
+  return sheets.length > 0 ? sheets[0] : null;
+}
+
+/**
+ * 指定された部屋のデータを処理し、学内集会願シートに書き込み、周知用データを収集
+ */
+function processRoomData(roomName, negotiationSs, newSs, templateSheet, scheduleForNotification, processingState) {
+  const negotiationRoomSheet = negotiationSs.getSheetByName(roomName);
+  if (!negotiationRoomSheet) {
+    Logger.log(`部屋 "${roomName}" のシートが折衝表に見つかりません。スキップします。`);
+    return;
+  }
+
+  // --- 高速化: データを一括取得 ---
+  // 2行目から32行目（31日分）、日付列から時間割の最後の列まで取得
+  const totalDays = 31;
+  const dataRange = negotiationRoomSheet.getRange(2, 1, totalDays, NEGOTIATION_SHEET_START_PERIOD_COLUMN + NEGOTIATION_SHEET_NUMBER_OF_PERIODS - 1);
+  const allValues = dataRange.getValues(); // 2次元配列で値を取得
+  
+  // --- 高速化: 結合セル情報の一括取得とマッピング ---
+  // 時間割部分の結合情報を取得
+  const timetableRange = negotiationRoomSheet.getRange(2, NEGOTIATION_SHEET_START_PERIOD_COLUMN, totalDays, NEGOTIATION_SHEET_NUMBER_OF_PERIODS);
+  const mergedRanges = timetableRange.getMergedRanges();
+  
+  // 利用状況マップを作成 (0:未使用, 1:使用)
+  // allValuesのインデックスに対応させるため、同じサイズの配列を用意
+  // ただし、時間割部分は allValues の (col index) - (NEGOTIATION_SHEET_START_PERIOD_COLUMN - 1)
+  let usageMap = Array(totalDays).fill(null).map(() => Array(NEGOTIATION_SHEET_NUMBER_OF_PERIODS).fill(0));
+
+  // 1. 通常の値から埋める
+  for (let i = 0; i < totalDays; i++) {
+    for (let j = 0; j < NEGOTIATION_SHEET_NUMBER_OF_PERIODS; j++) {
+      // allValuesの列インデックス: 日付(0), ..., 時間割開始(2), ...
+      const val = allValues[i][NEGOTIATION_SHEET_START_PERIOD_COLUMN - 1 + j];
+      if (val === CIRCLE_NAME) {
+        usageMap[i][j] = 1;
+      }
+    }
+  }
+
+  // 2. 結合セル情報から埋める
+  // mergedRangesはシート全体の座標を持つので、相対座標に変換してマッピング
+  for (const range of mergedRanges) {
+    if (range.getDisplayValue() === CIRCLE_NAME) {
+      const startRow = range.getRow() - 2; // 配列インデックスに変換 (2行目開始なので -2)
+      const endRow = startRow + range.getNumRows() - 1;
+      const startCol = range.getColumn() - NEGOTIATION_SHEET_START_PERIOD_COLUMN;
+      const endCol = startCol + range.getNumColumns() - 1;
+
+      for (let r = startRow; r <= endRow; r++) {
+        if (r >= 0 && r < totalDays) {
+          for (let c = startCol; c <= endCol; c++) {
+            if (c >= 0 && c < NEGOTIATION_SHEET_NUMBER_OF_PERIODS) {
+              usageMap[r][c] = 1;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // --- データ処理とページデータの作成 ---
+  let pagesData = []; // ページごとの書き込みデータを格納 [[row1data, row2data...], [row1data...]]
+  let currentPageRows = [];
+
+  for (let dayIndex = 0; dayIndex < totalDays; dayIndex++) {
+    const dateValue = allValues[dayIndex][0]; // 日付列
+    if (!dateValue || !(dateValue instanceof Date)) continue;
+
+    const date = new Date(dateValue);
+    const month = date.getMonth() + 1;
+    const day = date.getDate();
+    const dayOfWeek = ["日", "月", "火", "水", "木", "金", "土"][date.getDay()];
+
+    // ファイル名更新（初回のみ）
+    if (!processingState.isFirstDataProcessed) {
+      newSs.rename(NEW_SPREADSHEET_BASE_NAME + month + "月");
+      scheduleForNotification[0] = month;
+      processingState.isFirstDataProcessed = true;
+    }
+
+    // その日の利用枠を抽出
+    const dailyActivitySlots = extractSlotsFromMap(usageMap[dayIndex]);
+
+    if (dailyActivitySlots.length > 0) {
+      // 行データの作成
+      const rowData = createRowData(roomName, { month, day, dayOfWeek }, dailyActivitySlots);
+      currentPageRows.push(rowData);
+      
+      // 通知用データの更新
+      updateNotificationSchedule(scheduleForNotification, day, roomName, dailyActivitySlots, dayOfWeek);
+
+      // ページがいっぱいになったら次へ
+      if (currentPageRows.length === ROWS_PER_MEETING_SHEET) {
+        pagesData.push(currentPageRows);
+        currentPageRows = [];
+      }
+    }
+  }
+  // 半端なページがあれば追加
+  if (currentPageRows.length > 0) {
+    pagesData.push(currentPageRows);
+  }
+
+  // --- シート作成と一括書き込み ---
+  if (pagesData.length === 0) {
+    // Logger.log(`部屋 "${roomName}" の活動データがありません。`);
+    return;
+  }
+
+  // 初期シート削除フラグ処理
+  if (processingState.initialSheet1) {
+     // 最初のシート作成前に削除はできないので、作成後に削除するようメイン関数で制御するか、
+     // ここで最初のシートを作成した直後に削除する。
+     // 今回は後でまとめて削除ロジックがあるのでここでは何もしない、あるいは
+     // 書き込みループ内で処理する。
+  }
+
+  pagesData.forEach((pageRows, index) => {
+    const sheetPageNumber = index + 1;
+    const currentMeetingRequestSheet = templateSheet.copyTo(newSs);
+    currentMeetingRequestSheet.setName(`${roomName}_${sheetPageNumber}`);
+
+    if (processingState.initialSheet1) {
+        try { newSs.deleteSheet(processingState.initialSheet1); } catch(e){}
+        processingState.initialSheet1 = null;
+    }
+
+    // バッチ書き込み
+    // pageRows は [ [col1, col2... col29], ... ] の形
+    // 書き込み開始位置は 1行1列目から、行数はデータの数、列数は設定値
+    if (pageRows.length > 0) {
+      currentMeetingRequestSheet.getRange(1, 1, pageRows.length, OUTPUT_SHEET_WRITE_COLUMNS).setValues(pageRows);
+    }
+  });
+}
+
+/**
+ * 使用状況マップの1行分から活動スロットを抽出
+ */
+function extractSlotsFromMap(dailyUsage) {
+  let activitySlots = [];
+  for (let k = 0; k < dailyUsage.length; k++) {
+    if (dailyUsage[k] === 1) {
+      const startPeriodIndex = k;
+      while (k < dailyUsage.length && dailyUsage[k] === 1) k++;
+      const endPeriodIndex = k - 1;
+      activitySlots.push({
+        startPeriod: startPeriodIndex,
+        endPeriod: endPeriodIndex,
+        startTime: START_TIMES[startPeriodIndex],
+        endTime: END_TIMES[endPeriodIndex]
+      });
+    }
+  }
+  return activitySlots;
+}
+
+/**
+ * 1行分の書き込みデータを作成（配列生成）
+ */
+function createRowData(roomName, dateInfo, dailyActivitySlots) {
+  let outputRowData = Array(OUTPUT_SHEET_WRITE_COLUMNS).fill('');
+  
+  outputRowData[OUTPUT_SHEET_ROOM_NAME_COLUMN - 1] = roomName;
+  outputRowData[OUTPUT_SHEET_DATE_COLUMN - 1] = `${dateInfo.month}/${dateInfo.day}(${dateInfo.dayOfWeek})`;
+
+  dailyActivitySlots.forEach(slot => {
+    for (let period = slot.startPeriod; period <= slot.endPeriod; period++) {
+      outputRowData[OUTPUT_SHEET_FIRST_PERIOD_MARK_COLUMN_INDEX + period] = '〇';
+    }
+  });
+
+  const firstSlot = dailyActivitySlots[0];
+  const startTime = splitTime(firstSlot.startTime);
+  const endTime = splitTime(firstSlot.endTime);
+
+  outputRowData[OUTPUT_SHEET_START_HOUR_COLUMN - 1] = startTime.hour;
+  outputRowData[OUTPUT_SHEET_START_MINUTE_COLUMN - 1] = startTime.minute;
+  outputRowData[OUTPUT_SHEET_END_HOUR_COLUMN - 1] = endTime.hour;
+  outputRowData[OUTPUT_SHEET_END_MINUTE_COLUMN - 1] = endTime.minute;
+  outputRowData[OUTPUT_SHEET_USERS_COLUMN - 1] = NUMBER_OF_USERS;
+
+  // テンプレートに元から入っている区切り文字も、setValuesで消えないように含める。
+  outputRowData[OUTPUT_SHEET_START_TIME_SEPARATOR_COLUMN - 1] = '：';
+  outputRowData[OUTPUT_SHEET_TIME_RANGE_SEPARATOR_COLUMN - 1] = '-';
+  outputRowData[OUTPUT_SHEET_END_TIME_SEPARATOR_COLUMN - 1] = '：';
+
+  // 追加時間（備考欄）
+  if (dailyActivitySlots.length > 1) {
+    let additionalTimes = dailyActivitySlots.slice(1).map(slot => `${slot.startTime}～${slot.endTime}`);
+    outputRowData[OUTPUT_SHEET_REMARKS_COLUMN - 1] = additionalTimes.join(' ');
+  }
+  
+  return outputRowData;
+}
+
+/**
+ * "H:MM"形式の時刻を、時・分に分割
+ */
+function splitTime(timeText) {
+  const [hour, minute] = timeText.split(':');
+  return { hour, minute };
+}
+
+/**
+ * 周知用データ配列を更新
+ */
+function updateNotificationSchedule(scheduleForNotification, day, roomName, dailyActivitySlots, dayOfWeek) {
+  if (!scheduleForNotification[day]) {
+    scheduleForNotification[day] = [];
+  }
+  dailyActivitySlots.forEach(slot => {
+    scheduleForNotification[day].push([roomName, slot.startTime, slot.endTime, `(${dayOfWeek})`]);
+  });
+}
+
+/**
+ * 周知用シートを作成
+ */
+function createNotificationSheetAndFinalize(newSs, scheduleForNotification, processingState) {
+  if (processingState.isFirstDataProcessed) {
+    const notificationString = buildNotificationString(scheduleForNotification);
+    if (notificationString) {
+      let notificationSheet = newSs.getSheetByName(NOTIFICATION_SHEET_NAME);
+      if (notificationSheet) newSs.deleteSheet(notificationSheet);
+      
+      notificationSheet = newSs.insertSheet(NOTIFICATION_SHEET_NAME, newSs.getNumSheets());
+      notificationSheet.getRange('A1').setValue(notificationString).setWrap(true);
+      // Logger.log(`シート "${NOTIFICATION_SHEET_NAME}" を作成し、周知用情報を書き込みました。`);
+    }
+  }
+  // initialSheet1の削除漏れがあればここで削除
+  if (processingState.initialSheet1) {
+      try {
+        const s = newSs.getSheetByName(processingState.initialSheet1.getName());
+        if(s && newSs.getSheets().length > 1) newSs.deleteSheet(s);
+      } catch(e){}
+  }
+}
+
+/**
+ * 周知用メッセージ文字列を生成
+ */
+function buildNotificationString(scheduleData) {
+  let builtString = "";
+  const scheduleMonth = scheduleData[0]; 
+
+  if (!scheduleMonth) return ""; 
+
   for (let day = 1; day <= 31; day++) {
-    if (schedule[day] != null) {
-      for (let x = 0; x < schedule[day].length; x++) {
-        if (x != 0 && schedule[day][x - 1][0] == schedule[day][x][0]) {
-          scheduleStr = scheduleStr + ' ' + schedule[day][x][1] + '～' + schedule[day][x][2];
-        } else if (x == 0) {
-          scheduleStr = scheduleStr + '\n' + schedule[0] + '/' + day + schedule[day][x][3] + ' ' + schedule[day][x][0] + ' ' + schedule[day][x][1] + '～' + schedule[day][x][2];
-        } else {
-          scheduleStr = scheduleStr + '\n';
-          if (day <= 9) {
-            scheduleStr = scheduleStr + '             ';//space x 
-          } else {
-            scheduleStr = scheduleStr + '               ';//space x 
-          }
-          scheduleStr = scheduleStr + schedule[day][x][0] + ' ' + schedule[day][x][1] + '～' + schedule[day][x][2];
+    if (scheduleData[day] && scheduleData[day].length > 0) {
+      scheduleData[day].sort((a, b) => {
+        if (a[0] < b[0]) return -1; if (a[0] > b[0]) return 1;
+        if (a[1] < b[1]) return -1; if (a[1] > b[1]) return 1;
+        return 0;
+      });
+      for (let i = 0; i < scheduleData[day].length; i++) {
+        const entry = scheduleData[day][i];
+        const prevEntry = i > 0 ? scheduleData[day][i - 1] : null;
+        if (i === 0) { 
+          builtString += `\n${scheduleMonth}/${day}${entry[3]} ${entry[0]} ${entry[1]}～${entry[2]}`;
+        } else if (prevEntry && entry[0] === prevEntry[0]) { 
+          builtString += ` ${entry[1]}～${entry[2]}`;
+        } else { 
+          let padding = (day <= 9) ? "         " : "           ";
+          builtString += `\n${padding}${entry[0]} ${entry[1]}～${entry[2]}`;
         }
       }
-      scheduleStr = scheduleStr + '\n';
+      builtString += '\n';
     }
   }
-  scheduleStr = scheduleStr.substring(1);
-  //Logger.log(scheduleStr);
-
-  let scheduleSheet = newSS.insertSheet();
-  newSS.moveActiveSheet(newSS.getNumSheets());
-  scheduleSheet.setName("周知用");
-  scheduleSheet.getRange('A1').setValue(scheduleStr);
-}
-
-
-
-
-
-function R1C1toA1(r1c1) {
-  var row = r1c1.match(/R(\d+)/)[1];
-  var col = r1c1.match(/C(\d+)/)[1];
-  return columnToLetter(col) + row;
-}
-
-function columnToLetter(column) {
-  var temp, letter = '';
-  while (column > 0) {
-    temp = (column - 1) % 26;
-    letter = String.fromCharCode(temp + 65) + letter;
-    column = (column - temp - 1) / 26;
-  }
-  return letter;
-}
-
-function A1toCol(a1) {
-  const code = a1.replace(/\d/g, "");
-  const col = code.charCodeAt(0) - 64;
-  //Logger.log(col);
-  return Number(col);
-}
-
-function A1Notation_to_start(A1Notation) {
-  const index = A1Notation.indexOf(':');
-  const a1 = A1Notation.substring(0, index);
-  const start = A1toCol(a1);
-  return start;
-}
-
-function A1Notation_to_start(A1Notation) {
-  const index = A1Notation.indexOf(':');
-  const a1 = A1Notation.substring(0, index);
-  const start = A1toCol(a1);
-  return start;
-}
-
-function A1Notation_to_end(A1Notation) {
-  const index = A1Notation.indexOf(':');
-  const a1 = A1Notation.substring(index + 1);
-  const end = A1toCol(a1);
-  return end;
+  return builtString.startsWith('\n') ? builtString.substring(1) : builtString;
 }
