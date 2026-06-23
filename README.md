@@ -9,18 +9,6 @@
 
 ---
 
-## Shonai_GASとShonai_GAS_v2の違い
-
-同じ日・同じ部屋で時間を空けた場合の動作が異なります。
-
-**Shonai_GAS の挙動：**  
-<img width="485" alt="Shonai_GAS_behavior" src="https://github.com/user-attachments/assets/669f0b07-605b-4760-b3b0-a3545cd94e37">
-
-**Shonai_GAS_v2 の挙動：**  
-<img width="556" alt="Shonai_GAS_v2_behavior" src="https://github.com/user-attachments/assets/5d052c0d-4337-4e94-acfb-6b58fd0644e4">
-
----
-
 ## ⚠ 注意事項
 
 - **自己責任で使用してください。**
